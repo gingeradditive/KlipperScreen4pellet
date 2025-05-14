@@ -36,7 +36,7 @@ class Panel(ScreenPanel):
                 "option": "smooth_time",
                 "value": 0.04,
                 "digits": 3,
-                "maxval": 0.200,
+                "maxval": 1.0,
             },
         ]
 
