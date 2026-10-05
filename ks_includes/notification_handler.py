@@ -48,10 +48,12 @@ class NotificationHandler:
 
         self._screen.printer.process_update(data)
 
-        if "idle_timeout" in data and "state" in data["idle_timeout"]:
-            if data["idle_timeout"]["state"] == "Printing":
-                self.__remove_confirm_dialogs()
-            return
+        # Dismiss confirmations only when a print starts (e.g. from another UI).
+        # idle_timeout turns "Printing" for any gcode, including the G1's
+        # delayed_gcode FEEDER_CHECK_STATUS that runs every second, which closed
+        # every confirm dialog before it could be accepted.
+        if data.get("print_stats", {}).get("state") == "printing":
+            self.__remove_confirm_dialogs()
 
         if (
             "manual_probe" in data
@@ -61,10 +63,12 @@ class NotificationHandler:
             self._screen.show_panel("zcalibrate")
             return
 
+        # Status updates only carry changed fields: max_deviation (None unless
+        # SCREWS_TILT_CALCULATE MAX_DEVIATION=... was used) is read from the
+        # merged printer state, new results come with the update.
         if (
-            "screws_tilt_adjust" in data
-            and "max_deviation" in data["screws_tilt_adjust"]
-            and not data["screws_tilt_adjust"]["max_deviation"]
+            data.get("screws_tilt_adjust", {}).get("results")
+            and not self._screen.printer.get_stat("screws_tilt_adjust", "max_deviation")
             and "bed_level" not in self._screen._cur_panels
         ):
             self._screen.show_panel("bed_level")
