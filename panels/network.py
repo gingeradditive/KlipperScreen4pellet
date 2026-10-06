@@ -66,6 +66,9 @@ class Panel(ScreenPanel):
 
         self.interface = self.sdbus_nm.get_primary_interface()
         logging.info(f"Primary interface: {self.interface}")
+        if self.interface is not None:
+            # Bind the backend to the primary adapter (it may be wlan1, a USB dongle)
+            self.sdbus_nm.set_selected_interface(self.interface)
 
         iface_label = Gtk.Label(_("Interface") + ": ")
         if len(self.network_devices) <= 1:
@@ -253,6 +256,11 @@ class Panel(ScreenPanel):
             self.conn_status = GLib.timeout_add_seconds(1, self.sdbus_nm.monitor_connection_status)
             for child in self.scroll.get_children():
                 self.scroll.remove(child)
+            # The list may belong to the previous Wi-Fi adapter
+            for child in self.network_list.get_children():
+                self.network_list.remove(child)
+            self.network_rows.clear()
+            self.networks.clear()
             self.scroll.add(self.network_list)
             self.network_list.show_all()
             self.sdbus_nm.rescan()
@@ -299,7 +307,9 @@ class Panel(ScreenPanel):
             self.remove_network_from_list(bssid)
         if response_id == Gtk.ResponseType.OK:
             logging.info(f"Deleting {ssid}")
-            self.sdbus_nm.delete_network(ssid)
+            result = self.sdbus_nm.delete_network(ssid)
+            if "error" in result:
+                self._screen.show_popup_message(result["message"])
         if response_id == Gtk.ResponseType.APPLY:
             logging.info(f"Disconnecting {ssid}")
             self.sdbus_nm.disconnect_network()

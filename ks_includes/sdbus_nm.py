@@ -161,13 +161,20 @@ class SdbusNm:
     def set_selected_interface(self, iface):
         dev = next((d for d in self.get_all_network_devices() if d["interface"] == iface), None)
         if dev and dev["type"] == enums.DeviceType.WIFI:
-            for wireless in self.get_wireless_interfaces():
-                if wireless.interface == iface and wireless.state == enums.DeviceState.UNMANAGED:
+            wireless = next(
+                (w for w in self.get_wireless_interfaces() if w.interface == iface), None
+            )
+            if wireless is not None:
+                if wireless.state == enums.DeviceState.UNMANAGED:
                     self.popup(
                         f"{iface} is not managed by "
                         "NetworkManager and cannot be controlled by this app"
                     )
                     return False
+                # Scan, connect, add and disconnect act on the selected adapter
+                # (e.g. a USB dongle on wlan1), not always on the first one
+                self.wlan_device = wireless
+                self.wifi_state = -1
         self._selected_interface = iface
         return True
 
@@ -337,15 +344,28 @@ class SdbusNm:
         self.wlan_device.disconnect()
 
     def delete_network(self, ssid):
-        if path := self.get_connection_path_by_ssid(ssid):
-            self.delete_connection_path(path)
-        else:
+        # The same SSID can be saved more than once (Imager/headless_nm "preconfigured",
+        # one per adapter, ...): remove all of them or the network stays known
+        paths = self.get_connection_paths_by_ssid(ssid)
+        if not paths:
             logging.debug(f"SSID '{ssid}' not found among saved connections")
+            return {"status": "not_found"}
+        for path in paths:
+            result = self.delete_connection_path(path)
+            if result is not None:
+                return result
+        return {"status": "success"}
 
     def delete_connection_path(self, path):
         try:
             NetworkConnectionSettings(path).delete()
             logging.info(f"Deleted connection path: {path}")
+        except exceptions.NmSettingsPermissionDeniedError:
+            logging.exception(f"Insufficient privileges to delete: {path}")
+            return {
+                "error": "insufficient_privileges",
+                "message": _("Insufficient privileges"),
+            }
         except Exception as e:
             logging.exception(f"Failed to delete connection path: {path} - {e}")
             return {
@@ -363,7 +383,8 @@ class SdbusNm:
         except Exception as e:
             self.popup(f"Unexpected error: {e}")
 
-    def get_connection_path_by_ssid(self, ssid):
+    def get_connection_paths_by_ssid(self, ssid):
+        paths = []
         existing_networks = NetworkManagerSettings().list_connections()
         for connection_path in existing_networks:
             connection_settings = NetworkConnectionSettings(connection_path).get_settings()
@@ -372,8 +393,11 @@ class SdbusNm:
                 and connection_settings["802-11-wireless"].get("ssid")
                 and connection_settings["802-11-wireless"]["ssid"][1].decode() == ssid
             ):
-                return connection_path
-        return None
+                paths.append(connection_path)
+        return paths
+
+    def get_connection_path_by_ssid(self, ssid):
+        return next(iter(self.get_connection_paths_by_ssid(ssid)), None)
 
     def connect(self, ssid):
         if target_connection := self.get_connection_path_by_ssid(ssid):
